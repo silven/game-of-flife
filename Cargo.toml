@@ -24,3 +24,7 @@ git = "https://github.com/pistondevelopers/image"
 
 [dependencies.itertools]
 itertools = "0.1.4"
+
+[dependencies.opencl]
+#git = "https://github.com/luqmana/rust-opencl"
+path = "../rust-opencl"

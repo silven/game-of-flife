@@ -1,5 +1,6 @@
 #![feature(core)]
 
+extern crate opencl;
 extern crate core;
 extern crate piston;
 extern crate image;
@@ -11,19 +12,23 @@ extern crate itertools;
 use opengl_graphics::{ Gl, OpenGL };
 use sdl2_window::Sdl2Window;
 use piston::input::{ Button, MouseButton };
+use opencl::mem::CLBuffer;
+use opencl::hl::{ Context, Device, CommandQueue, Program, Kernel};
 
 const GRID_SIZE: usize = 200;
 const CELL_SIZE: usize = 5;
 const DELTAS: [(isize, isize); 8] = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)];
 
-#[derive(Copy)]
-enum Cell {
-    Alive,
-    Dead,
-}
 
 struct Grid {
-    buffers: [[[Cell; GRID_SIZE]; GRID_SIZE]; 2],
+    ctx: Context,
+    device: Device,
+    queue: CommandQueue,
+    program: Program,
+    kernel: Kernel,
+
+    buffers: [Vec<u8>; 2],
+    cl_buffers: [CLBuffer<u8>; 2],
     current_buffer: usize,
 }
 
@@ -37,11 +42,12 @@ impl<'a, I> Iterator for GridIterator<'a, I>  where I: Iterator<Item = (usize, u
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        while let Some((x, y)) = self.positions.next() {
-            if let Cell::Alive = self.grid.buffers[self.grid.current_buffer][x][y] {
+        while let Some((y, x)) = self.positions.next() {
+            if 0 < self.grid.buffers[self.grid.current_buffer][y * GRID_SIZE + x] {
                 return Some((x, y));
             }
         }
+
         return None;
     }
 }
@@ -49,8 +55,37 @@ impl<'a, I> Iterator for GridIterator<'a, I>  where I: Iterator<Item = (usize, u
 
 impl Grid {
     fn new() -> Grid {
+
+        let tick_kernel = include_str!("tick.cl");
+        println!("tick_kernel {}", tick_kernel);
+
+        let (device, ctx, queue) = opencl::util::create_compute_context().unwrap();
+
+        println!("{}", device.name());
+
+        let program = ctx.create_program_from_source(tick_kernel);
+        program.build(&device).ok().expect("Couldn't build program.");
+
+        let kernel = program.create_kernel("tick");
+
+        let mut v_a: Vec<u8> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
+        let mut v_b: Vec<u8> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
+        unsafe {
+            v_a.set_len(GRID_SIZE * GRID_SIZE);
+            v_b.set_len(GRID_SIZE * GRID_SIZE);
+        }
+
+        let a: CLBuffer<u8> = ctx.create_buffer(GRID_SIZE * GRID_SIZE, opencl::cl::CL_MEM_READ_WRITE);
+        let b: CLBuffer<u8> = ctx.create_buffer(GRID_SIZE * GRID_SIZE, opencl::cl::CL_MEM_READ_WRITE);
+
         return Grid{
-            buffers: [[[Cell::Dead; GRID_SIZE]; GRID_SIZE]; 2],
+            ctx: ctx,
+            device: device,
+            queue: queue,
+            program: program,
+            kernel: kernel,
+            buffers: [v_a, v_b],
+            cl_buffers: [a, b],
             current_buffer: 0,
         };
     }
@@ -63,36 +98,23 @@ impl Grid {
     }
 
     fn tick(&mut self) {
-        let next_buffer = (self.current_buffer + 1) % self.buffers.len();
+        let current_buffer = self.current_buffer;
+        let next_buffer = (current_buffer + 1) % self.buffers.len();
 
-        for x in 0..GRID_SIZE {
-            for y in 0..GRID_SIZE {
+        self.queue.write(&self.cl_buffers[current_buffer], &self.buffers[current_buffer].as_slice(), ());
 
-                let mut neighbours = 0;
-                for &(dx, dy) in DELTAS.iter() {
-                    let n_x = wrap(x as isize + dx);
-                    let n_y = wrap(y as isize + dy);
+        self.kernel.set_arg(0, &self.cl_buffers[current_buffer]);
+        self.kernel.set_arg(1, &self.cl_buffers[next_buffer]);
 
-                    let neighbour_state = self.buffers[self.current_buffer][n_x][n_y];
-                    if let Cell::Alive = neighbour_state {
-                        neighbours += 1;
-                    }
-                }
+        let event = self.queue.enqueue_async_kernel(&self.kernel, (GRID_SIZE, GRID_SIZE), None, ());
 
-                let current_state = (self.buffers[self.current_buffer][x][y], neighbours);
-                let next_state = match current_state {
-                    (Cell::Alive, 2) => Cell::Alive,
-                    (_, 3) => Cell::Alive,
-                    (_, _) => Cell::Dead,
-                };
-                self.buffers[next_buffer][x][y] = next_state;
-            }
-        }
+        self.buffers[next_buffer] = self.queue.get(&self.cl_buffers[next_buffer], &event);
+
         self.current_buffer = next_buffer;
     }
 
     fn set_alive(&mut self, x: usize, y: usize) {
-        self.buffers[self.current_buffer][x][y] = Cell::Alive;
+        self.buffers[self.current_buffer][y * GRID_SIZE + x] = 1;
     }
 }
 
@@ -121,6 +143,7 @@ fn main() {
             samples: 0,
         }
     );
+
 
     let mut grid = Box::new(Grid::new());
     let mut drawing = false;
