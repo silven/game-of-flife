@@ -27,8 +27,8 @@ struct Grid {
     program: Program,
     kernel: Kernel,
 
-    buffers: [Vec<u8>; 2],
-    cl_buffers: [CLBuffer<u8>; 2],
+    buffers: [Vec<u32>; 2],
+    cl_buffers: [CLBuffer<u32>; 2],
     current_buffer: usize,
 }
 
@@ -59,8 +59,7 @@ impl Grid {
         let tick_kernel = include_str!("tick.cl");
         println!("tick_kernel {}", tick_kernel);
 
-        let (device, ctx, queue) = opencl::util::create_compute_context().unwrap();
-
+        let (device, ctx, queue) = opencl::util::create_compute_context_prefer(opencl::util::PreferedType::GPUPrefered).unwrap();
         println!("{}", device.name());
 
         let program = ctx.create_program_from_source(tick_kernel);
@@ -68,15 +67,15 @@ impl Grid {
 
         let kernel = program.create_kernel("tick");
 
-        let mut v_a: Vec<u8> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
-        let mut v_b: Vec<u8> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
+        let mut v_a: Vec<u32> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
+        let mut v_b: Vec<u32> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
         unsafe {
             v_a.set_len(GRID_SIZE * GRID_SIZE);
             v_b.set_len(GRID_SIZE * GRID_SIZE);
         }
 
-        let a: CLBuffer<u8> = ctx.create_buffer(GRID_SIZE * GRID_SIZE, opencl::cl::CL_MEM_READ_WRITE);
-        let b: CLBuffer<u8> = ctx.create_buffer(GRID_SIZE * GRID_SIZE, opencl::cl::CL_MEM_READ_WRITE);
+        let a: CLBuffer<u32> = ctx.create_buffer(GRID_SIZE * GRID_SIZE, opencl::cl::CL_MEM_READ_WRITE);
+        let b: CLBuffer<u32> = ctx.create_buffer(GRID_SIZE * GRID_SIZE, opencl::cl::CL_MEM_READ_WRITE);
 
         return Grid{
             ctx: ctx,

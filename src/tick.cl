@@ -9,8 +9,8 @@ int wrap(const int n, const int size) {
 	}
 }
 
-__kernel void tick(__global const uchar *current,
-	               __global uchar *next) {
+__kernel void tick(__global const int *current,
+	               __global int *next) {
 
 	int x = get_global_id(0);
 	int y = get_global_id(1);
